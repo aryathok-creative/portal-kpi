@@ -177,6 +177,13 @@
           >
             📊 Dashboard Global
           </button>
+          <button
+            onclick="openGantiPassword(false)"
+            id="btn-gantipw"
+            class="nav-btn w-full text-left p-3 rounded-lg text-sm transition"
+          >
+            🔑 Ganti Password
+          </button>
         </div>
         <button
           onclick="window.location.reload()"
@@ -718,6 +725,61 @@
       </main>
     </div>
 
+    <!-- MODAL GANTI PASSWORD -->
+    <div
+      id="pwModal"
+      class="hidden no-print fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4"
+    >
+      <div
+        class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 border-t-8 border-[#00A693]"
+      >
+        <h2 class="text-lg font-black text-slate-800 mb-1">🔑 Ganti Password</h2>
+        <p id="pwModalHint" class="text-xs text-gray-500 mb-4">
+          Perbarui kata sandi Anda.
+        </p>
+        <div class="space-y-3">
+          <input
+            type="password"
+            id="pwLama"
+            placeholder="Password lama"
+            autocomplete="off"
+            class="w-full p-3 border rounded-lg bg-gray-50 text-sm outline-none focus:bg-white"
+          />
+          <input
+            type="password"
+            id="pwBaru"
+            placeholder="Password baru (min. 6 karakter)"
+            autocomplete="off"
+            class="w-full p-3 border rounded-lg bg-gray-50 text-sm outline-none focus:bg-white"
+          />
+          <input
+            type="password"
+            id="pwKonfirmasi"
+            placeholder="Ulangi password baru"
+            autocomplete="off"
+            class="w-full p-3 border rounded-lg bg-gray-50 text-sm outline-none focus:bg-white"
+          />
+          <div id="pwMsg" class="text-xs font-semibold"></div>
+        </div>
+        <div class="flex gap-2 mt-5">
+          <button
+            id="pwBtnBatal"
+            onclick="closeGantiPassword()"
+            class="flex-1 border border-gray-300 text-gray-600 p-2 rounded-lg text-sm font-bold hover:bg-gray-100"
+          >
+            Batal
+          </button>
+          <button
+            id="pwBtnSimpan"
+            onclick="submitGantiPassword()"
+            class="flex-1 bg-[#00A693] text-white p-2 rounded-lg text-sm font-bold hover:bg-teal-700"
+          >
+            Simpan
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- LOGIKA SISTEM CERDAS & AKSES -->
     <script>
       // ============================================================
@@ -863,6 +925,7 @@
               document.getElementById("userRoleBadge").innerText =
                 currentUser.jabatan;
               populateStafDropdown();
+              if (currentUser.mustChange) openGantiPassword(true);
             } else {
               alert(j.error || "Email atau Password salah!");
             }
@@ -1450,6 +1513,101 @@
         }
       }
 
+      // ---------- GANTI / RESET PASSWORD ----------
+      let pwForced = false;
+
+      function openGantiPassword(force) {
+        pwForced = !!force;
+        document.getElementById("pwLama").value = "";
+        document.getElementById("pwBaru").value = "";
+        document.getElementById("pwKonfirmasi").value = "";
+        document.getElementById("pwMsg").innerText = "";
+        document.getElementById("pwModalHint").innerText = force
+          ? "Demi keamanan, Anda WAJIB mengganti password sebelum melanjutkan."
+          : "Perbarui kata sandi Anda.";
+        // saat wajib ganti, tombol Batal disembunyikan
+        document.getElementById("pwBtnBatal").style.display = force ? "none" : "";
+        document.getElementById("pwModal").classList.remove("hidden");
+      }
+
+      function closeGantiPassword() {
+        if (pwForced) return; // tidak boleh ditutup saat wajib ganti
+        document.getElementById("pwModal").classList.add("hidden");
+      }
+
+      async function submitGantiPassword() {
+        const lama = document.getElementById("pwLama").value.trim();
+        const baru = document.getElementById("pwBaru").value.trim();
+        const konf = document.getElementById("pwKonfirmasi").value.trim();
+        const msg = document.getElementById("pwMsg");
+        msg.className = "text-xs font-semibold text-red-600";
+        if (!lama || !baru || !konf) {
+          msg.innerText = "Semua kolom wajib diisi.";
+          return;
+        }
+        if (baru.length < 6) {
+          msg.innerText = "Password baru minimal 6 karakter.";
+          return;
+        }
+        if (baru !== konf) {
+          msg.innerText = "Konfirmasi password tidak cocok.";
+          return;
+        }
+
+        const btn = document.getElementById("pwBtnSimpan");
+        btn.disabled = true;
+        const prev = btn.innerText;
+        btn.innerText = "Menyimpan...";
+        try {
+          const j = await apiPost({
+            action: "gantiPassword",
+            passwordLama: lama,
+            passwordBaru: baru,
+          });
+          if (j.ok) {
+            msg.className = "text-xs font-semibold text-teal-700";
+            msg.innerText = "Password berhasil diganti.";
+            pwForced = false;
+            setTimeout(() => {
+              document.getElementById("pwModal").classList.add("hidden");
+            }, 900);
+          } else {
+            msg.innerText = j.error || "Gagal mengganti password.";
+          }
+        } catch (err) {
+          msg.innerText = "Gagal menghubungi server: " + err.message;
+        } finally {
+          btn.disabled = false;
+          btn.innerText = prev;
+        }
+      }
+
+      // Reset password orang lain (hanya super admin, tombol muncul di Dashboard Global)
+      async function resetPasswordAdmin(email) {
+        const k =
+          MOCK_KARYAWAN.find(
+            (x) => (x.email || "").toLowerCase() === email.toLowerCase()
+          ) || { nama: email };
+        if (
+          !confirm(
+            `Reset password untuk ${k.nama}?\nPassword sementara akan di-set = NIK, dan yang bersangkutan wajib menggantinya saat login.`
+          )
+        )
+          return;
+        try {
+          const j = await apiPost({ action: "resetPassword", emailTarget: email });
+          if (j.ok) {
+            alert(
+              `Password ${k.nama} berhasil di-reset.\nPassword sementara: ${j.tempPassword}\nMinta ybs login lalu segera ganti password.`
+            );
+          } else {
+            alert("Gagal reset: " + (j.error || ""));
+          }
+        } catch (err) {
+          alert("Gagal menghubungi server: " + err.message);
+        }
+      }
+
       // ---------- REKAP GLOBAL (dari database) ----------
       async function renderRekap() {
         const myEmail = (currentUser.email || "").trim().toLowerCase();
@@ -1517,7 +1675,11 @@
                     <td class="p-3 border text-center text-blue-600">${hard}</td>
                     <td class="p-3 border text-center text-purple-600">${soft}</td>
                     <td class="p-3 border text-center font-black text-[#00A693]">${total}</td>
-                    <td class="p-3 border text-center"><span class="${statusStyle} text-[10px] px-2 py-1 rounded-full font-bold uppercase">${status}</span></td>
+                    <td class="p-3 border text-center"><span class="${statusStyle} text-[10px] px-2 py-1 rounded-full font-bold uppercase">${status}</span>${
+                      accLevel === "SUPER_ADMIN" && kEmail !== myEmail
+                        ? `<button onclick="resetPasswordAdmin('${k.email}')" class="ml-2 no-print text-[10px] bg-amber-100 text-amber-700 px-2 py-1 rounded font-bold hover:bg-amber-200">Reset PW</button>`
+                        : ""
+                    }</td>
                 </tr>`;
           })
           .join("");
