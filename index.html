@@ -317,6 +317,16 @@
               memiliki akses untuk mengubah nilai.
             </div>
 
+            <div
+              id="lockAlert"
+              class="hidden no-print bg-red-50 text-red-800 text-xs p-3 rounded-lg border border-red-200 font-semibold"
+            >
+              🔒 Dokumen ini sudah
+              <span class="font-bold uppercase">DISAHKAN</span> dan terkunci.
+              Perubahan tidak diperbolehkan kecuali dibuka kembali oleh pengesah
+              untuk revisi.
+            </div>
+
             <!-- SECTION A: HARD SKILL -->
             <div class="space-y-2">
               <h3
@@ -365,6 +375,10 @@
               <div
                 class="flex justify-end text-xs font-semibold text-slate-600 py-1 bg-gray-50 px-2 rounded border"
               >
+                <span class="mr-auto"
+                  >Total Bobot:
+                  <span id="totalBobotHard" class="font-bold text-sm">0%</span></span
+                >
                 <span class="mr-4"
                   >Total Skor Murni:
                   <span
@@ -428,6 +442,10 @@
               <div
                 class="flex justify-end text-xs font-semibold text-slate-600 py-1 bg-gray-50 px-2 rounded border"
               >
+                <span class="mr-auto"
+                  >Total Bobot:
+                  <span id="totalBobotSoft" class="font-bold text-sm">0%</span></span
+                >
                 <span class="mr-4"
                   >Total Skor Murni:
                   <span
@@ -615,8 +633,9 @@
             <div
               class="text-center text-[9px] italic text-gray-400 pt-2 mt-4 avoid-break no-print"
             >
-              Disclaimer: Dokumen ini dibuat otomatis oleh sistem KPI PT. PMU
-              dan sah tanpa tanda tangan basah.
+              Dokumen ini diterbitkan otomatis oleh sistem KPI PT. PMU.
+              Keaslian dan status pengesahannya dapat diverifikasi dengan
+              memindai QR di atas.
             </div>
 
             <!-- AUDIT TRAIL LOG -->
@@ -684,6 +703,13 @@
                     class="hidden bg-[#00A693] text-white px-4 py-2 rounded font-bold text-xs hover:bg-teal-700 transition shadow-sm"
                   >
                     ✅ Sahkan
+                  </button>
+                  <button
+                    id="btnBukaKunci"
+                    onclick="bukaKunci()"
+                    class="hidden bg-red-600 text-white px-4 py-2 rounded font-bold text-xs hover:bg-red-700 transition shadow-sm"
+                  >
+                    🔓 Buka Kunci (Revisi)
                   </button>
                 </div>
               </div>
@@ -811,6 +837,14 @@
         propSoft: 0,
         total: 0,
         grade: "Grade E",
+      };
+      // status validasi bobot (Hard & Soft harus 100%)
+      let bobotState = {
+        hardSum: 0,
+        softSum: 0,
+        hardOK: true,
+        softOK: true,
+        ok: true,
       };
 
       // ---------- HELPER KOMUNIKASI KE BACKEND (POST + token) ----------
@@ -1092,7 +1126,11 @@
           currentUser.jabatan,
           currentUser.departemen
         );
-        const canEdit = myEmail === atasanEmail || accLevel === "SUPER_ADMIN";
+        // ATURAN: tidak seorang pun boleh menilai DIRINYA SENDIRI.
+        // ATURAN: hanya PENILAI yang ditunjuk (atasanEmail) yang boleh mengubah nilai.
+        //         Super admin TIDAK boleh menimpa hasil penilaian penilai.
+        const isSelf = stafEmail === myEmail;
+        const canEdit = !isSelf && myEmail === atasanEmail;
 
         if (!canEdit) {
           document.getElementById("viewOnlyAlert").classList.remove("hidden");
@@ -1107,7 +1145,7 @@
         document.getElementById("btnVerifikasi2").classList.add("hidden");
         document.getElementById("btnSahkan").classList.add("hidden");
 
-        if (myEmail === atasanEmail)
+        if (myEmail === atasanEmail && !isSelf)
           document.getElementById("btnAjukan").classList.remove("hidden");
         if (myEmail === (verif1Obj.email || "").trim().toLowerCase())
           document.getElementById("btnVerifikasi1").classList.remove("hidden");
@@ -1231,6 +1269,7 @@
         refreshQRCodes();
         simpanLog(`Dokumen dibuka / dimuat.`);
         kalkulasi();
+        applyLockState();
 
         // muat nilai yang sudah tersimpan (kalau ada) dari database
         muatHasilTersimpan(stafEmail);
@@ -1255,11 +1294,24 @@
           terapkanSkor("hardSkillTable", d.hard || []);
           terapkanSkor("softSkillTable", d.soft || []);
 
+          // QR arahkan ke halaman verifikasi (bila server menyediakan verifyUrl)
+          if (rec.verifyUrl) {
+            const qr =
+              "https://api.qrserver.com/v1/create-qr-code/?size=75x75&data=";
+            ["qrStaff", "qrAtasan", "qrVerif1", "qrVerif2", "qrDireksi"].forEach(
+              (id) => {
+                const el = document.getElementById(id);
+                if (el) el.src = qr + encodeURIComponent(rec.verifyUrl);
+              }
+            );
+          }
+
           refreshQRCodes();
           kalkulasi();
           simpanLog(
             `Memuat nilai tersimpan (status: ${currentDocumentStatus}).`
           );
+          applyLockState();
         } catch (e) {
           /* diamkan: kalau gagal, tetap tampil form kosong */
         }
@@ -1410,6 +1462,65 @@
         const gLbl = document.getElementById("lblGrade");
         gLbl.innerText = `Grade Hasil: ${grade}`;
         gLbl.className = `text-[10px] font-bold mt-1 uppercase ${clr}`;
+
+        // --- VALIDASI TOTAL BOBOT (Hard & Soft harus 100%) ---
+        let totBobotHard = 0;
+        hBobots.forEach(
+          (b) => (totBobotHard += Number(b.getAttribute("data-bobot")) || 0)
+        );
+        let totBobotSoft = 0;
+        sBobots.forEach(
+          (b) => (totBobotSoft += Number(b.getAttribute("data-bobot")) || 0)
+        );
+        const hardOK = hBobots.length === 0 || Math.abs(totBobotHard - 100) <= 0.1;
+        const softOK = sBobots.length === 0 || Math.abs(totBobotSoft - 100) <= 0.1;
+        bobotState = {
+          hardSum: totBobotHard,
+          softSum: totBobotSoft,
+          hardOK: hardOK,
+          softOK: softOK,
+          ok: hardOK && softOK,
+        };
+        _setBobotDisplay("totalBobotHard", totBobotHard, hardOK, hBobots.length);
+        _setBobotDisplay("totalBobotSoft", totBobotSoft, softOK, sBobots.length);
+        updateSaveGuard();
+      }
+
+      function _setBobotDisplay(id, val, ok, count) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.innerText = count === 0 ? "-" : val + "%";
+        el.className =
+          "font-bold text-sm " +
+          (count === 0 ? "text-gray-400" : ok ? "text-teal-700" : "text-red-600");
+      }
+
+      // matikan tombol Simpan & Ajukan bila bobot belum 100%
+      function updateSaveGuard() {
+        const ok = bobotState.ok;
+        ["btnSimpan", "btnAjukan"].forEach((id) => {
+          const b = document.getElementById(id);
+          if (!b) return;
+          b.disabled = !ok;
+          b.classList.toggle("opacity-50", !ok);
+          b.classList.toggle("cursor-not-allowed", !ok);
+        });
+      }
+
+      function bobotWarningMsg() {
+        let m =
+          "Tidak bisa menyimpan / mengajukan: total bobot indikator harus 100%.\n";
+        if (!bobotState.hardOK)
+          m += `\n• Hard Skill: total ${bobotState.hardSum}% (selisih ${(
+            bobotState.hardSum - 100
+          ).toFixed(0)}%)`;
+        if (!bobotState.softOK)
+          m += `\n• Soft Skill: total ${bobotState.softSum}% (selisih ${(
+            bobotState.softSum - 100
+          ).toFixed(0)}%)`;
+        m +=
+          "\n\nPerbaiki bobot di Master_Indikator lebih dulu (jalankan audit bobot).";
+        return m;
       }
 
       function refreshQRCodes() {
@@ -1455,6 +1566,10 @@
           alert("Pilih staf yang dinilai terlebih dahulu.");
           return;
         }
+        if (!bobotState.ok) {
+          alert(bobotWarningMsg());
+          return;
+        }
         const btn = document.getElementById("btnSimpan");
         const note = document.getElementById("alasanLog").value;
         let msg = `Menyimpan skor/perubahan nilai KPI.`;
@@ -1487,6 +1602,11 @@
           alert("Pilih staf yang dinilai terlebih dahulu.");
           return;
         }
+        // Ajukan hanya boleh bila bobot sudah 100%
+        if (statusBaru === "PENILAIAN_SELESAI" && !bobotState.ok) {
+          alert(bobotWarningMsg());
+          return;
+        }
         const note = document.getElementById("alasanLog").value;
         let msg = `Mengubah status dokumen menjadi: <strong>${statusBaru}</strong>.`;
         if (note) msg += ` Catatan: <em>"${note}"</em>`;
@@ -1511,6 +1631,73 @@
         } finally {
           document.getElementById("alasanLog").value = "";
         }
+      }
+
+      // ---------- KUNCI SETELAH DISAHKAN + BUKA KUNCI ----------
+      function applyLockState() {
+        const status = (currentDocumentStatus || "").toUpperCase();
+        const locked = status.indexOf("DISAHKAN") > -1;
+        const myEmail = (currentUser.email || "").trim().toLowerCase();
+        const accLevel = getAccessLevel(
+          currentUser.jabatan,
+          currentUser.departemen
+        );
+        const isUnlocker =
+          accLevel === "SUPER_ADMIN" ||
+          (chainSahkan &&
+            (chainSahkan.email || "").trim().toLowerCase() === myEmail);
+
+        const lockBanner = document.getElementById("lockAlert");
+        const btnBuka = document.getElementById("btnBukaKunci");
+
+        if (locked) {
+          // kunci semua input skor & catatan (kolom alasan TIDAK dikunci)
+          document
+            .querySelectorAll(
+              "#hardSkillTable .skor-btn, #softSkillTable .skor-btn"
+            )
+            .forEach((b) => b.setAttribute("disabled", "disabled"));
+          document
+            .querySelectorAll(
+              "#hardSkillTable input[type='text'], #softSkillTable input[type='text']"
+            )
+            .forEach((i) => i.setAttribute("disabled", "disabled"));
+          [
+            "btnSimpan",
+            "btnAjukan",
+            "btnVerifikasi1",
+            "btnVerifikasi2",
+            "btnSahkan",
+          ].forEach((id) =>
+            document.getElementById(id).classList.add("hidden")
+          );
+          if (lockBanner) lockBanner.classList.remove("hidden");
+          if (btnBuka) btnBuka.classList.toggle("hidden", !isUnlocker);
+        } else {
+          if (lockBanner) lockBanner.classList.add("hidden");
+          if (btnBuka) btnBuka.classList.add("hidden");
+        }
+      }
+
+      async function bukaKunci() {
+        const alasan = (
+          document.getElementById("alasanLog").value || ""
+        ).trim();
+        if (!alasan) {
+          alert(
+            "Wajib mengisi ALASAN di kolom catatan sebelum membuka kunci dokumen."
+          );
+          return;
+        }
+        if (
+          !confirm(
+            "Buka kunci dokumen yang sudah DISAHKAN untuk direvisi?\nStatus pengesahan akan DIBATALKAN dan proses persetujuan harus diulang dari awal."
+          )
+        )
+          return;
+        await updateStatus("DIBUKA_REVISI");
+        // muat ulang lembar agar penilai bisa mengedit kembali
+        renderKPI();
       }
 
       // ---------- GANTI / RESET PASSWORD ----------
