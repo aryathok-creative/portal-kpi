@@ -914,17 +914,19 @@
       }
 
       // --- SISTEM HAK AKSES ---
-      function getAccessLevel(role, dept) {
-        const r = (role || "").toLowerCase();
-        const d = (dept || "").toLowerCase();
-        if (
-          r.includes("direktur") ||
-          r.includes("bod") ||
-          (d.includes("hrga") && r.includes("manager"))
-        )
-          return "SUPER_ADMIN";
-        if (r.includes("manager") || r.includes("mgr")) return "MANAGER";
-        if (r.includes("spv") || r.includes("supervisor")) return "SPV";
+      // Hak akses dibaca dari kolom Role + flag SuperAdmin (bukan dari teks Jabatan).
+      // SUPER_ADMIN bila flag SuperAdmin=YES ATAU Role=Direksi.
+      function getAccessLevel(user) {
+        if (!user) return "STAFF";
+        const sa =
+          user.superAdmin === true ||
+          ["yes", "true", "1", "ya"].includes(
+            String(user.superAdmin || "").toLowerCase().trim()
+          );
+        const role = String(user.role || "").toLowerCase().trim();
+        if (sa || role === "direksi") return "SUPER_ADMIN";
+        if (role === "manager" || role === "mgr") return "MANAGER";
+        if (role === "supervisor" || role === "spv") return "SPV";
         return "STAFF";
       }
 
@@ -975,10 +977,7 @@
         const dropdown = document.getElementById("stafSelector");
         const myEmail = (currentUser.email || "").trim().toLowerCase();
         const myDept = (currentUser.departemen || "").trim().toLowerCase();
-        const accLevel = getAccessLevel(
-          currentUser.jabatan,
-          currentUser.departemen
-        );
+        const accLevel = getAccessLevel(currentUser);
 
         const directSubordinates = MOCK_STRUKTUR.filter(
           (s) => (s.email_penilai || "").trim().toLowerCase() === myEmail
@@ -1122,10 +1121,7 @@
           sahkanObj.jabatan;
 
         const myEmail = (currentUser.email || "").trim().toLowerCase();
-        const accLevel = getAccessLevel(
-          currentUser.jabatan,
-          currentUser.departemen
-        );
+        const accLevel = getAccessLevel(currentUser);
         // ATURAN: tidak seorang pun boleh menilai DIRINYA SENDIRI.
         // ATURAN: hanya PENILAI yang ditunjuk (atasanEmail) yang boleh mengubah nilai.
         //         Super admin TIDAK boleh menimpa hasil penilaian penilai.
@@ -1638,10 +1634,7 @@
         const status = (currentDocumentStatus || "").toUpperCase();
         const locked = status.indexOf("DISAHKAN") > -1;
         const myEmail = (currentUser.email || "").trim().toLowerCase();
-        const accLevel = getAccessLevel(
-          currentUser.jabatan,
-          currentUser.departemen
-        );
+        const accLevel = getAccessLevel(currentUser);
         const isUnlocker =
           accLevel === "SUPER_ADMIN" ||
           (chainSahkan &&
@@ -1799,10 +1792,7 @@
       async function renderRekap() {
         const myEmail = (currentUser.email || "").trim().toLowerCase();
         const myDept = (currentUser.departemen || "").trim().toLowerCase();
-        const accLevel = getAccessLevel(
-          currentUser.jabatan,
-          currentUser.departemen
-        );
+        const accLevel = getAccessLevel(currentUser);
 
         const directSubordinates = MOCK_STRUKTUR.filter(
           (s) => (s.email_penilai || "").trim().toLowerCase() === myEmail
