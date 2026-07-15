@@ -1011,15 +1011,41 @@
         if (menu === "rekap") renderRekap();
       }
 
-      // --- HELPER: bandingkan 2 email dengan AMAN ---
-      // PENTING: kalau salah satu (atau kedua) email KOSONG, JANGAN dianggap cocok.
-      // Tanpa penjagaan ini, staf yang kolom Email-nya kosong di Master_User bisa
-      // "kebetulan cocok" dengan baris lain yang emailnya juga kosong (mis. atasan
-      // yang belum diisi emailnya), sehingga struktur penilai/dinilai jadi salah.
+      // --- HELPER: bandingkan 2 nilai (email / NIK) dengan AMAN ---
+      // PENTING: kalau salah satu (atau kedua) nilai KOSONG, JANGAN dianggap cocok.
+      // Tanpa penjagaan ini, staf yang datanya kosong bisa "kebetulan cocok" dengan
+      // baris lain yang juga kosong, sehingga struktur penilai/dinilai jadi salah.
       function emailsMatch(a, b) {
         a = String(a || "").trim().toLowerCase();
         b = String(b || "").trim().toLowerCase();
         return !!a && !!b && a === b;
+      }
+
+      // RC_02: relasi Struktur_Penilaian sekarang berbasis NIK (lebih stabil
+      // daripada Email -- NIK wajib diisi & tidak pernah berubah). nikMatch
+      // dipakai untuk semua pencocokan penilai/staf-dinilai & indikator individu.
+      function nikMatch(a, b) {
+        a = String(a || "").trim();
+        b = String(b || "").trim();
+        return !!a && !!b && a === b;
+      }
+
+      // RC_02: tentukan apakah satu baris Master_Indikator berlaku untuk staf
+      // tertentu, berdasarkan kolom Target_Type/Target_Value:
+      //   SEMUA       -> berlaku untuk semua karyawan
+      //   DEPARTEMEN  -> berlaku kalau Departemen staf == Target_Value
+      //   JABATAN     -> berlaku kalau Jabatan staf == Target_Value
+      //   INDIVIDU    -> berlaku kalau NIK staf == Target_Value (pengecualian personal)
+      // Kalau Target_Type tidak dikenali/kosong, dianggap berlaku (fail-safe supaya
+      // indikator tidak "hilang" karena data belum lengkap).
+      function indikatorBerlaku(item, staf) {
+        const type = String(item.targetType || "SEMUA").trim().toUpperCase();
+        const val = String(item.targetValue || "").trim().toLowerCase();
+        if (!type || type === "SEMUA") return true;
+        if (type === "DEPARTEMEN") return val === (staf.departemen || "").trim().toLowerCase();
+        if (type === "JABATAN") return val === (staf.jabatan || "").trim().toLowerCase();
+        if (type === "INDIVIDU") return val === String(staf.nik || "").trim().toLowerCase();
+        return true;
       }
 
       // --- SISTEM HAK AKSES ---
@@ -1077,26 +1103,27 @@
           }
         });
 
+      // RC_02: daftar bawahan (untuk dropdown staf) sekarang dicocokkan via NIK.
       function populateStafDropdown() {
         const dropdown = document.getElementById("stafSelector");
-        const myEmail = (currentUser.email || "").trim().toLowerCase();
+        const myNik = String(currentUser.nik || "").trim();
         const myDept = (currentUser.departemen || "").trim().toLowerCase();
         const accLevel = getAccessLevel(currentUser);
 
         const directSubordinates = MOCK_STRUKTUR.filter((s) =>
-          emailsMatch(s.email_penilai, myEmail)
-        ).map((s) => (s.email_staf_dinilai || "").trim().toLowerCase());
+          nikMatch(s.nik_penilai, myNik)
+        ).map((s) => String(s.nik_staf_dinilai || "").trim());
 
         dropdown.innerHTML =
           '<option value="">-- Pilih Staf Untuk Dinilai --</option>';
 
         MOCK_KARYAWAN.forEach((k) => {
-          const kEmail = (k.email || "").trim().toLowerCase();
+          const kNik = String(k.nik || "").trim();
           const kDept = (k.departemen || "").trim().toLowerCase();
           let canView = false;
           if (accLevel === "SUPER_ADMIN") canView = true;
-          else if (kEmail === myEmail) canView = true;
-          else if (directSubordinates.includes(kEmail)) canView = true;
+          else if (kNik === myNik) canView = true;
+          else if (directSubordinates.includes(kNik)) canView = true;
           else if (accLevel === "MANAGER" && kDept === myDept) canView = true;
           if (canView)
             dropdown.innerHTML += `<option value="${k.nik}">${k.nama} (${k.jabatan})</option>`;
@@ -1121,6 +1148,7 @@
         );
         currentStaf = staf;
         const stafEmail = (staf.email || "").trim().toLowerCase();
+        const stafNik = String(staf.nik || "").trim();
         const stafRole = (staf.jabatan || "").trim().toLowerCase();
 
         document.getElementById("namaDinilai").innerText = staf.nama;
@@ -1128,16 +1156,21 @@
         document.getElementById("nikDinilai").innerText = staf.nik;
         document.getElementById("ttdStaff").innerText = staf.nama;
 
+        // RC_02: cari struktur penilai lewat NIK (bukan email lagi).
         const strukturLink = MOCK_STRUKTUR.find((s) =>
-          emailsMatch(s.email_staf_dinilai, stafEmail)
+          nikMatch(s.nik_staf_dinilai, stafNik)
         );
-        let atasanEmail = strukturLink
-          ? (strukturLink.email_penilai || "").trim().toLowerCase()
+        let atasanNik = strukturLink
+          ? String(strukturLink.nik_penilai || "").trim()
           : "";
         let atasanObj = MOCK_KARYAWAN.find((k) =>
-          emailsMatch(k.email, atasanEmail)
+          nikMatch(String(k.nik || "").trim(), atasanNik)
         );
-        if (!atasanObj) atasanObj = { nama: "-", jabatan: "-", email: "-" };
+        if (!atasanObj) atasanObj = { nama: "-", jabatan: "-", email: "-", nik: "-" };
+        // email atasan yang sudah berhasil di-resolve lewat NIK -- dipakai untuk
+        // cek hak akses (canEdit dst) di bawah, supaya perbandingan tetap ke email
+        // sesi login (currentUser.email) tanpa perlu ubah seluruh alur izin.
+        let atasanEmail = (atasanObj.email || "").trim().toLowerCase();
 
         document.getElementById("ttdAtasan").innerText = atasanObj.nama;
         document.getElementById("ttdAtasanJabatan").innerText =
@@ -1193,12 +1226,13 @@
           ) {
             verif1Obj = atasanObj;
           } else {
+            // RC_02: cari SPV dari SPV (rantai verifikasi) juga lewat NIK.
             const spvLink = MOCK_STRUKTUR.find((s) =>
-              emailsMatch(s.email_staf_dinilai, atasanEmail)
+              nikMatch(s.nik_staf_dinilai, atasanNik)
             );
-            if (spvLink && spvLink.email_penilai) {
+            if (spvLink && spvLink.nik_penilai) {
               verif1Obj = MOCK_KARYAWAN.find((k) =>
-                emailsMatch(k.email, spvLink.email_penilai)
+                nikMatch(String(k.nik || "").trim(), spvLink.nik_penilai)
               ) || { nama: "-", jabatan: "-", email: "-" };
             }
           }
@@ -1223,8 +1257,9 @@
         const myEmail = (currentUser.email || "").trim().toLowerCase();
         const accLevel = getAccessLevel(currentUser);
         // ATURAN: tidak seorang pun boleh menilai DIRINYA SENDIRI.
-        // ATURAN: hanya PENILAI yang ditunjuk (atasanEmail) yang boleh mengubah nilai.
-        //         Super admin TIDAK boleh menimpa hasil penilaian penilai.
+        // ATURAN: hanya PENILAI yang ditunjuk (atasanEmail, hasil resolve NIK) yang
+        //         boleh mengubah nilai. Super admin TIDAK boleh menimpa hasil
+        //         penilaian penilai.
         const isSelf = stafEmail === myEmail;
         const canEdit = !isSelf && myEmail === atasanEmail;
 
@@ -1280,17 +1315,19 @@
           return `<input type="text" placeholder="${place}" ${dis}>`;
         };
 
+        // RC_02: pencocokan indikator sekarang lewat Target_Type/Target_Value
+        // (SEMUA/DEPARTEMEN/JABATAN/INDIVIDU) via indikatorBerlaku(), berlaku
+        // untuk Hard Skill MAUPUN Soft Skill (sebelumnya Soft Skill selalu
+        // dianggap berlaku untuk semua orang tanpa penyaringan sama sekali).
+        // Tiap baris juga membawa data-id (ID_Indikator) supaya skor yang
+        // tersimpan nanti tertaut ke ID yang stabil, bukan urutan baris.
         globalMasterIndikator.forEach((item) => {
           const kat = (item.jenis || item.kategori || "").toLowerCase().trim();
-          const itemJabatan = (item.jabatan || "").toLowerCase().trim();
           let bobotAngka = parseFloat(String(item.bobot).replace("%", "")) || 0;
+          const berlaku = indikatorBerlaku(item, staf);
+          const idAttr = (item.idIndikator || "").replace(/"/g, "&quot;");
 
-          if (
-            kat === "hard skill" &&
-            (itemJabatan === stafRole ||
-              itemJabatan === "semua jabatan" ||
-              itemJabatan === "semua departemen")
-          ) {
+          if (kat === "hard skill" && berlaku) {
             htmlHard += `
                         <tr class="border-b border-gray-200 hover:bg-gray-50 transition avoid-break">
                             <td class="p-2 border-r border-gray-200 text-center font-bold text-gray-500">${idxHard++}</td>
@@ -1309,13 +1346,13 @@
                             <td class="p-2 border-r border-gray-200 text-center font-bold text-slate-600">${
                               item.target || "100%"
                             }</td>
-                            <td class="p-2 border-r border-gray-200 text-center text-teal-600 font-bold kpi-hard-bobot" data-bobot="${bobotAngka}">${bobotAngka}%</td>
+                            <td class="p-2 border-r border-gray-200 text-center text-teal-600 font-bold kpi-hard-bobot" data-bobot="${bobotAngka}" data-id="${idAttr}">${bobotAngka}%</td>
                             <td class="p-2 border-r border-gray-200 text-center">${renderSelect()}</td>
                             <td class="p-2">${renderInput(
                               "Tulis capaian..."
                             )}</td>
                         </tr>`;
-          } else if (kat === "soft skill") {
+          } else if (kat === "soft skill" && berlaku) {
             htmlSoft += `
                         <tr class="border-b border-gray-200 hover:bg-gray-50 transition avoid-break">
                             <td class="p-2 border-r border-gray-200 text-center font-bold text-gray-500">${idxSoft++}</td>
@@ -1328,7 +1365,7 @@
                             <td class="p-2 border-r border-gray-200 text-center font-bold text-slate-600">${
                               item.target || "Standar"
                             }</td>
-                            <td class="p-2 border-r border-gray-200 text-center text-teal-600 font-bold kpi-soft-bobot" data-bobot="${bobotAngka}">${bobotAngka}%</td>
+                            <td class="p-2 border-r border-gray-200 text-center text-teal-600 font-bold kpi-soft-bobot" data-bobot="${bobotAngka}" data-id="${idAttr}">${bobotAngka}%</td>
                             <td class="p-2 border-r border-gray-200 text-center">${renderSelect()}</td>
                             <td class="p-2">${renderInput(
                               "Tulis perilaku..."
@@ -1368,16 +1405,20 @@
         applyLockState();
 
         // muat nilai yang sudah tersimpan (kalau ada) dari database
-        muatHasilTersimpan(stafEmail);
+        muatHasilTersimpan(stafEmail, stafNik);
       }
 
       // ---------- MUAT HASIL TERSIMPAN DARI DATABASE ----------
-      async function muatHasilTersimpan(stafEmail) {
+      // RC_02: cocokkan hasil tersimpan lewat NIK dulu (lebih stabil), baru
+      // fallback ke email untuk data lama yang belum ada NIK_Staf-nya.
+      async function muatHasilTersimpan(stafEmail, stafNik) {
         try {
           const periode = document.getElementById("periodeFilter").value;
           const j = await apiCall("getHasil", { periode: periode });
           const rec = ((j && j.data) || []).find(
-            (r) => (r.emailStaf || "").toLowerCase() === stafEmail
+            (r) =>
+              (stafNik && r.nikStaf && r.nikStaf === stafNik) ||
+              (r.emailStaf || "").toLowerCase() === stafEmail
           );
           if (!rec) return; // belum ada -> biarkan kosong
 
@@ -1387,8 +1428,8 @@
           ).innerText = `STATUS: ${currentDocumentStatus}`;
 
           const d = rec.detail || {};
-          terapkanSkor("hardSkillTable", d.hard || []);
-          terapkanSkor("softSkillTable", d.soft || []);
+          terapkanSkor("hardSkillTable", "kpi-hard-bobot", d.hard || []);
+          terapkanSkor("softSkillTable", "kpi-soft-bobot", d.soft || []);
 
           // QR arahkan ke halaman verifikasi (bila server menyediakan verifyUrl)
           if (rec.verifyUrl) {
@@ -1413,10 +1454,40 @@
         }
       }
 
-      function terapkanSkor(tableId, arr) {
+      // RC_02: skor tersimpan dicocokkan berdasarkan ID_Indikator (data-id di
+      // sel bobot), BUKAN urutan baris lagi -- supaya histori nilai tidak
+      // "geser" salah tempat kalau daftar indikator berubah di kemudian hari.
+      // Kalau data lama (hasil simpan sebelum RC_02) tidak punya idIndikator
+      // sama sekali, otomatis fallback ke pencocokan berurutan seperti dulu.
+      function terapkanSkor(tableId, bobotClass, arr) {
         const groups = document.querySelectorAll(`#${tableId} .skor-group`);
         const notes = document.querySelectorAll(`#${tableId} input[type='text']`);
-        arr.forEach((it, i) => {
+        const bobots = document.querySelectorAll("." + bobotClass);
+
+        const punyaId = arr.some((it) => it && it.idIndikator);
+
+        if (!punyaId) {
+          // MODE LAMA (kompatibilitas mundur): cocokkan berdasarkan urutan saja
+          arr.forEach((it, i) => {
+            if (groups[i]) {
+              groups[i].querySelector(".kpi-val-input").value = String(it.skor || 0);
+              paintGroup(groups[i]);
+            }
+            if (notes[i]) notes[i].value = it.catatan || "";
+          });
+          return;
+        }
+
+        // MODE BARU: cocokkan berdasarkan ID_Indikator, tidak peduli urutan
+        const byId = {};
+        arr.forEach((it) => {
+          if (it && it.idIndikator) byId[it.idIndikator] = it;
+        });
+
+        bobots.forEach((b, i) => {
+          const id = b.getAttribute("data-id");
+          const it = id ? byId[id] : null;
+          if (!it) return;
           if (groups[i]) {
             groups[i].querySelector(".kpi-val-input").value = String(it.skor || 0);
             paintGroup(groups[i]);
@@ -1454,6 +1525,8 @@
       }
 
       // ---------- KUMPULKAN SKOR DARI TABEL ----------
+      // RC_02: tiap entri sekarang membawa idIndikator (dari data-id di sel bobot)
+      // supaya bisa dicocokkan balik dengan benar oleh terapkanSkor().
       function ambilSkorSection(tableId, bobotClass) {
         const sels = document.querySelectorAll(`#${tableId} .kpi-val-input`);
         const notes = document.querySelectorAll(`#${tableId} input[type='text']`);
@@ -1461,6 +1534,7 @@
         const arr = [];
         sels.forEach((s, i) => {
           arr.push({
+            idIndikator: bobots[i] ? bobots[i].getAttribute("data-id") || "" : "",
             skor: Number(s.value) || 0,
             catatan: notes[i] ? notes[i].value : "",
             bobot: bobots[i]
@@ -1471,15 +1545,19 @@
         return arr;
       }
 
+      // RC_02: payload simpan sekarang menyertakan NIK_Staf/NIK_Penilai supaya
+      // histori tetap tertaut ke orang yang benar walau email berubah/kosong.
       function susunPayload(statusVal) {
         return {
           action: "simpanPenilaian",
           periode: document.getElementById("periodeFilter").value,
           emailStaf: currentStaf.email,
+          nikStaf: currentStaf.nik,
           namaStaf: currentStaf.nama,
           departemen: currentStaf.departemen,
           jabatan: currentStaf.jabatan,
           emailPenilai: currentUser.email,
+          nikPenilai: currentUser.nik,
           namaPenilai: currentUser.nama,
           status: statusVal,
           nilaiHard: lastCalc.propHard,
@@ -1891,23 +1969,24 @@
       // ---------- REKAP GLOBAL (dari database) ----------
       // Data mentah disimpan di rekapRowsCache supaya kotak pencarian bisa
       // menyaring tampilan tanpa perlu panggil ulang server tiap kali mengetik.
+      // RC_02: resolusi atasan penilai sekarang lewat NIK.
       let rekapRowsCache = [];
 
       async function renderRekap() {
-        const myEmail = (currentUser.email || "").trim().toLowerCase();
+        const myNik = String(currentUser.nik || "").trim();
         const myDept = (currentUser.departemen || "").trim().toLowerCase();
         const accLevel = getAccessLevel(currentUser);
 
         const directSubordinates = MOCK_STRUKTUR.filter((s) =>
-          emailsMatch(s.email_penilai, myEmail)
-        ).map((s) => (s.email_staf_dinilai || "").trim().toLowerCase());
+          nikMatch(s.nik_penilai, myNik)
+        ).map((s) => String(s.nik_staf_dinilai || "").trim());
 
         const filteredStaf = MOCK_KARYAWAN.filter((k) => {
-          const kEmail = (k.email || "").trim().toLowerCase();
+          const kNik = String(k.nik || "").trim();
           const kDept = (k.departemen || "").trim().toLowerCase();
           if (accLevel === "SUPER_ADMIN") return true;
-          if (kEmail === myEmail) return true;
-          if (directSubordinates.includes(kEmail)) return true;
+          if (kNik === myNik) return true;
+          if (directSubordinates.includes(kNik)) return true;
           if (accLevel === "MANAGER" && kDept === myDept) return true;
           return false;
         });
@@ -1923,16 +2002,21 @@
         }
 
         rekapRowsCache = filteredStaf.map((k) => {
+          const kNik = String(k.nik || "").trim();
           const kEmail = (k.email || "").trim().toLowerCase();
           const sLink = MOCK_STRUKTUR.find((s) =>
-            emailsMatch(s.email_staf_dinilai, kEmail)
+            nikMatch(s.nik_staf_dinilai, kNik)
           );
-          let aEmail = sLink ? sLink.email_penilai : "";
-          let aObj = MOCK_KARYAWAN.find((at) => emailsMatch(at.email, aEmail));
+          let aNik = sLink ? sLink.nik_penilai : "";
+          let aObj = MOCK_KARYAWAN.find((at) =>
+            nikMatch(String(at.nik || "").trim(), aNik)
+          );
           if (!aObj) aObj = { nama: "-" };
 
           const rec = hasil.find(
-            (r) => (r.emailStaf || "").toLowerCase() === kEmail
+            (r) =>
+              (r.nikStaf && r.nikStaf === kNik) ||
+              (r.emailStaf || "").toLowerCase() === kEmail
           );
 
           return {
@@ -1946,7 +2030,7 @@
             total: rec ? Number(rec.nilaiAkhir).toFixed(2) : "-",
             status: rec && rec.status ? rec.status : "Belum Dinilai",
             dinilai: !!rec,
-            canReset: accLevel === "SUPER_ADMIN" && kEmail !== myEmail,
+            canReset: accLevel === "SUPER_ADMIN" && kNik !== myNik,
           };
         });
 
