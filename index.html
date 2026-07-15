@@ -39,12 +39,6 @@
         button {
           display: none !important;
         }
-        .print-only {
-          display: block !important;
-        }
-        .print-flex {
-          display: flex !important;
-        }
         .print-container {
           width: 100%;
           max-width: 100%;
@@ -81,10 +75,6 @@
         .page-break {
           page-break-before: always;
         }
-      }
-      .print-only,
-      .print-flex {
-        display: none;
       }
       .avoid-break {
         page-break-inside: avoid;
@@ -186,7 +176,7 @@
           </button>
         </div>
         <button
-          onclick="window.location.reload()"
+          onclick="logoutUser()"
           type="button"
           class="mt-auto bg-red-600/20 text-red-400 p-2 rounded-lg text-sm font-bold hover:bg-red-600/40 transition"
         >
@@ -198,7 +188,7 @@
       <main
         class="flex-grow p-4 md:p-6 print-container overflow-y-auto h-screen print:h-auto print:overflow-visible print:block bg-[#f0f4f8] w-full"
       >
-        <div class="print-only text-center border-b-2 border-black pb-2 mb-4">
+        <div class="hidden print:block text-center border-b-2 border-black pb-2 mb-4">
           <p class="text-right italic text-[9px] text-black mb-1">
             No. DP. G.01/DP/HRGA&amp;IT/HR.01/03/01
           </p>
@@ -561,7 +551,7 @@
 
             <!-- TANDA TANGAN BERJENJANG (LOGIKA STRUKTUR AKTIF) -->
             <div
-              class="print-flex flex flex-wrap justify-between text-center text-[10px] mt-8 pt-4 w-full text-black avoid-break"
+              class="hidden print:flex flex-wrap justify-between text-center text-[10px] mt-8 pt-4 w-full text-black avoid-break"
             >
               <div class="w-1/5 flex flex-col items-center px-1">
                 <p class="font-semibold text-gray-500 mb-1">
@@ -723,6 +713,19 @@
             <h2 class="text-lg font-black text-gray-800 mb-4 uppercase">
               Rekapitulasi Global KPI Karyawan
             </h2>
+            <div class="no-print mb-4 flex items-center gap-2">
+              <input
+                type="text"
+                id="rekapSearch"
+                oninput="filterRekap()"
+                placeholder="🔎 Cari nama, jabatan, departemen, atau atasan penilai..."
+                class="w-full max-w-md p-2 border rounded-lg text-sm bg-gray-50 outline-none focus:bg-white focus:border-teal-500 transition"
+              />
+              <span
+                id="rekapCount"
+                class="text-xs text-gray-400 font-semibold whitespace-nowrap"
+              ></span>
+            </div>
             <div class="overflow-x-auto">
               <table
                 class="w-full text-left text-sm border-collapse border border-gray-200"
@@ -867,6 +870,9 @@
         });
         const j = await res.json();
         if (j && j.needLogin) {
+          // token sudah tidak valid di server -> hapus juga simpanan lokal
+          // supaya reload berikutnya tidak mencoba pakai token basi lagi.
+          _clearSavedSession();
           alert(
             "Sesi berakhir atau tidak valid. Halaman akan dimuat ulang, silakan login kembali."
           );
@@ -874,6 +880,46 @@
           throw new Error("Sesi berakhir");
         }
         return j;
+      }
+
+      // ---------- SESI TETAP HIDUP SAAT REFRESH BROWSER ----------
+      // Token & profil user (TANPA password) disimpan di localStorage supaya
+      // saat browser di-refresh, halaman tidak terlempar balik ke form login.
+      const SESSION_KEY_TOKEN = "kpi_session_token";
+      const SESSION_KEY_USER = "kpi_session_user";
+
+      function _saveSession(token, user) {
+        try {
+          localStorage.setItem(SESSION_KEY_TOKEN, token);
+          localStorage.setItem(SESSION_KEY_USER, JSON.stringify(user));
+        } catch (e) {
+          /* localStorage tidak tersedia -> abaikan, sesi tetap jalan normal */
+        }
+      }
+
+      function _clearSavedSession() {
+        try {
+          localStorage.removeItem(SESSION_KEY_TOKEN);
+          localStorage.removeItem(SESSION_KEY_USER);
+        } catch (e) {}
+      }
+
+      function _showMainView() {
+        document.getElementById("loginView").classList.add("hidden");
+        document.getElementById("mainView").classList.remove("hidden");
+        document.getElementById("loggedUserName").innerText = currentUser.nama;
+        document.getElementById("userRoleBadge").innerText = currentUser.jabatan;
+        populateStafDropdown();
+      }
+
+      async function logoutUser() {
+        try {
+          await apiPost({ action: "logout" });
+        } catch (e) {
+          /* server mungkin sudah tidak bisa dihubungi, tetap lanjut logout lokal */
+        }
+        _clearSavedSession();
+        window.location.reload();
       }
 
       // Data master hanya boleh dimuat SETELAH login (butuh token).
@@ -888,9 +934,32 @@
         MOCK_STRUKTUR = (rS && rS.data) || [];
       }
 
-      // Saat halaman dibuka: TIDAK memuat data apa pun (belum ada token).
-      window.onload = function () {
+      // Saat halaman dibuka: coba pulihkan sesi dari localStorage dulu (kalau ada
+      // & masih valid di server). Kalau tidak ada / tidak valid, tampilkan login.
+      window.onload = async function () {
         document.getElementById("btnLogin").innerText = "Masuk Sistem";
+        let savedToken, savedUser;
+        try {
+          savedToken = localStorage.getItem(SESSION_KEY_TOKEN);
+          savedUser = localStorage.getItem(SESSION_KEY_USER);
+        } catch (e) {
+          savedToken = null;
+        }
+        if (!savedToken || !savedUser) return;
+
+        try {
+          authToken = savedToken;
+          currentUser = JSON.parse(savedUser);
+          await loadMasterData(); // sekaligus jadi validasi token ke server
+          _showMainView();
+          if (currentUser.mustChange) openGantiPassword(true);
+        } catch (e) {
+          // token basi/invalid -> _post sudah handle clear + reload kalau needLogin.
+          // Jaga-jaga untuk error lain (mis. offline): bersihkan & tampilkan login.
+          authToken = null;
+          currentUser = null;
+          _clearSavedSession();
+        }
       };
 
       function getTimestamp() {
@@ -911,6 +980,17 @@
         document.getElementById("sec-" + menu).classList.remove("hidden");
         document.getElementById("btn-" + menu).classList.add("active");
         if (menu === "rekap") renderRekap();
+      }
+
+      // --- HELPER: bandingkan 2 email dengan AMAN ---
+      // PENTING: kalau salah satu (atau kedua) email KOSONG, JANGAN dianggap cocok.
+      // Tanpa penjagaan ini, staf yang kolom Email-nya kosong di Master_User bisa
+      // "kebetulan cocok" dengan baris lain yang emailnya juga kosong (mis. atasan
+      // yang belum diisi emailnya), sehingga struktur penilai/dinilai jadi salah.
+      function emailsMatch(a, b) {
+        a = String(a || "").trim().toLowerCase();
+        b = String(b || "").trim().toLowerCase();
+        return !!a && !!b && a === b;
       }
 
       // --- SISTEM HAK AKSES ---
@@ -952,15 +1032,10 @@
             if (j.ok && j.user) {
               authToken = j.token; // simpan tiket sesi
               currentUser = j.user; // profil dari server, TANPA password
+              _saveSession(authToken, currentUser); // supaya sesi tahan refresh
               btn.innerText = "Memuat data...";
               await loadMasterData(); // data hanya dimuat SETELAH login
-              document.getElementById("loginView").classList.add("hidden");
-              document.getElementById("mainView").classList.remove("hidden");
-              document.getElementById("loggedUserName").innerText =
-                currentUser.nama;
-              document.getElementById("userRoleBadge").innerText =
-                currentUser.jabatan;
-              populateStafDropdown();
+              _showMainView();
               if (currentUser.mustChange) openGantiPassword(true);
             } else {
               alert(j.error || "Email atau Password salah!");
@@ -979,8 +1054,8 @@
         const myDept = (currentUser.departemen || "").trim().toLowerCase();
         const accLevel = getAccessLevel(currentUser);
 
-        const directSubordinates = MOCK_STRUKTUR.filter(
-          (s) => (s.email_penilai || "").trim().toLowerCase() === myEmail
+        const directSubordinates = MOCK_STRUKTUR.filter((s) =>
+          emailsMatch(s.email_penilai, myEmail)
         ).map((s) => (s.email_staf_dinilai || "").trim().toLowerCase());
 
         dropdown.innerHTML =
@@ -1024,14 +1099,14 @@
         document.getElementById("nikDinilai").innerText = staf.nik;
         document.getElementById("ttdStaff").innerText = staf.nama;
 
-        const strukturLink = MOCK_STRUKTUR.find(
-          (s) => (s.email_staf_dinilai || "").trim().toLowerCase() === stafEmail
+        const strukturLink = MOCK_STRUKTUR.find((s) =>
+          emailsMatch(s.email_staf_dinilai, stafEmail)
         );
         let atasanEmail = strukturLink
           ? (strukturLink.email_penilai || "").trim().toLowerCase()
           : "";
-        let atasanObj = MOCK_KARYAWAN.find(
-          (k) => (k.email || "").trim().toLowerCase() === atasanEmail
+        let atasanObj = MOCK_KARYAWAN.find((k) =>
+          emailsMatch(k.email, atasanEmail)
         );
         if (!atasanObj) atasanObj = { nama: "-", jabatan: "-", email: "-" };
 
@@ -1089,16 +1164,12 @@
           ) {
             verif1Obj = atasanObj;
           } else {
-            const spvLink = MOCK_STRUKTUR.find(
-              (s) =>
-                (s.email_staf_dinilai || "").trim().toLowerCase() ===
-                atasanEmail
+            const spvLink = MOCK_STRUKTUR.find((s) =>
+              emailsMatch(s.email_staf_dinilai, atasanEmail)
             );
             if (spvLink && spvLink.email_penilai) {
-              verif1Obj = MOCK_KARYAWAN.find(
-                (k) =>
-                  (k.email || "").trim().toLowerCase() ===
-                  spvLink.email_penilai.trim().toLowerCase()
+              verif1Obj = MOCK_KARYAWAN.find((k) =>
+                emailsMatch(k.email, spvLink.email_penilai)
               ) || { nama: "-", jabatan: "-", email: "-" };
             }
           }
@@ -1169,7 +1240,7 @@
               `class="skor-btn w-5 h-6 text-[10px] font-bold border border-gray-300 rounded bg-white text-slate-600 ${cursor}">${v}</button>`;
           }
           // angka untuk versi CETAK (tombol otomatis disembunyikan saat print)
-          html += `<span class="skor-print print-only font-bold text-sm">-</span></div>`;
+          html += `<span class="skor-print hidden print:inline font-bold text-sm">-</span></div>`;
           return html;
         };
 
@@ -1789,13 +1860,17 @@
       }
 
       // ---------- REKAP GLOBAL (dari database) ----------
+      // Data mentah disimpan di rekapRowsCache supaya kotak pencarian bisa
+      // menyaring tampilan tanpa perlu panggil ulang server tiap kali mengetik.
+      let rekapRowsCache = [];
+
       async function renderRekap() {
         const myEmail = (currentUser.email || "").trim().toLowerCase();
         const myDept = (currentUser.departemen || "").trim().toLowerCase();
         const accLevel = getAccessLevel(currentUser);
 
-        const directSubordinates = MOCK_STRUKTUR.filter(
-          (s) => (s.email_penilai || "").trim().toLowerCase() === myEmail
+        const directSubordinates = MOCK_STRUKTUR.filter((s) =>
+          emailsMatch(s.email_penilai, myEmail)
         ).map((s) => (s.email_staf_dinilai || "").trim().toLowerCase());
 
         const filteredStaf = MOCK_KARYAWAN.filter((k) => {
@@ -1818,49 +1893,84 @@
           hasil = [];
         }
 
-        const html = filteredStaf
-          .map((k) => {
-            const kEmail = (k.email || "").trim().toLowerCase();
-            const sLink = MOCK_STRUKTUR.find(
-              (s) =>
-                (s.email_staf_dinilai || "").trim().toLowerCase() === kEmail
-            );
-            let aEmail = sLink ? sLink.email_penilai : "";
-            let aObj = MOCK_KARYAWAN.find(
-              (at) =>
-                (at.email || "").trim().toLowerCase() ===
-                (aEmail || "").trim().toLowerCase()
-            );
-            if (!aObj) aObj = { nama: "-" };
+        rekapRowsCache = filteredStaf.map((k) => {
+          const kEmail = (k.email || "").trim().toLowerCase();
+          const sLink = MOCK_STRUKTUR.find((s) =>
+            emailsMatch(s.email_staf_dinilai, kEmail)
+          );
+          let aEmail = sLink ? sLink.email_penilai : "";
+          let aObj = MOCK_KARYAWAN.find((at) => emailsMatch(at.email, aEmail));
+          if (!aObj) aObj = { nama: "-" };
 
-            const rec = hasil.find(
-              (r) => (r.emailStaf || "").toLowerCase() === kEmail
+          const rec = hasil.find(
+            (r) => (r.emailStaf || "").toLowerCase() === kEmail
+          );
+
+          return {
+            nama: k.nama,
+            jabatan: k.jabatan,
+            departemen: k.departemen,
+            email: k.email,
+            atasanNama: aObj.nama,
+            hard: rec ? Number(rec.nilaiHard).toFixed(2) : "-",
+            soft: rec ? Number(rec.nilaiSoft).toFixed(2) : "-",
+            total: rec ? Number(rec.nilaiAkhir).toFixed(2) : "-",
+            status: rec && rec.status ? rec.status : "Belum Dinilai",
+            dinilai: !!rec,
+            canReset: accLevel === "SUPER_ADMIN" && kEmail !== myEmail,
+          };
+        });
+
+        filterRekap(); // langsung render (sekaligus terapkan kata kunci pencarian bila ada)
+      }
+
+      // Dipanggil tiap kali user mengetik di kotak pencarian Dashboard Global.
+      function filterRekap() {
+        const el = document.getElementById("rekapSearch");
+        const q = el ? el.value.trim().toLowerCase() : "";
+        const rows = !q
+          ? rekapRowsCache
+          : rekapRowsCache.filter((r) =>
+              [r.nama, r.jabatan, r.departemen, r.atasanNama]
+                .join(" | ")
+                .toLowerCase()
+                .includes(q)
             );
-            const hard = rec ? Number(rec.nilaiHard).toFixed(2) : "-";
-            const soft = rec ? Number(rec.nilaiSoft).toFixed(2) : "-";
-            const total = rec ? Number(rec.nilaiAkhir).toFixed(2) : "-";
-            const status = rec && rec.status ? rec.status : "Belum Dinilai";
-            const statusStyle = rec
+
+        const countEl = document.getElementById("rekapCount");
+        if (countEl) {
+          countEl.innerText = q
+            ? `${rows.length} dari ${rekapRowsCache.length} karyawan`
+            : `${rekapRowsCache.length} karyawan`;
+        }
+        renderRekapTable(rows);
+      }
+
+      function renderRekapTable(rows) {
+        const html = rows
+          .map((r) => {
+            const statusStyle = r.dinilai
               ? "bg-teal-100 text-teal-700"
               : "bg-gray-100 text-gray-600";
-
             return `
                 <tr class="hover:bg-gray-50 transition">
-                    <td class="p-3 border font-bold text-slate-700">${k.nama}</td>
-                    <td class="p-3 border text-xs text-gray-500">${k.jabatan}</td>
-                    <td class="p-3 border text-xs text-teal-700 font-bold">${aObj.nama}</td>
-                    <td class="p-3 border text-center text-blue-600">${hard}</td>
-                    <td class="p-3 border text-center text-purple-600">${soft}</td>
-                    <td class="p-3 border text-center font-black text-[#00A693]">${total}</td>
-                    <td class="p-3 border text-center"><span class="${statusStyle} text-[10px] px-2 py-1 rounded-full font-bold uppercase">${status}</span>${
-                      accLevel === "SUPER_ADMIN" && kEmail !== myEmail
-                        ? `<button onclick="resetPasswordAdmin('${k.email}')" class="ml-2 no-print text-[10px] bg-amber-100 text-amber-700 px-2 py-1 rounded font-bold hover:bg-amber-200">Reset PW</button>`
+                    <td class="p-3 border font-bold text-slate-700">${r.nama}</td>
+                    <td class="p-3 border text-xs text-gray-500">${r.jabatan}</td>
+                    <td class="p-3 border text-xs text-teal-700 font-bold">${r.atasanNama}</td>
+                    <td class="p-3 border text-center text-blue-600">${r.hard}</td>
+                    <td class="p-3 border text-center text-purple-600">${r.soft}</td>
+                    <td class="p-3 border text-center font-black text-[#00A693]">${r.total}</td>
+                    <td class="p-3 border text-center"><span class="${statusStyle} text-[10px] px-2 py-1 rounded-full font-bold uppercase">${r.status}</span>${
+                      r.canReset
+                        ? `<button onclick="resetPasswordAdmin('${r.email}')" class="ml-2 no-print text-[10px] bg-amber-100 text-amber-700 px-2 py-1 rounded font-bold hover:bg-amber-200">Reset PW</button>`
                         : ""
                     }</td>
                 </tr>`;
           })
           .join("");
-        document.getElementById("rekapTableBody").innerHTML = html;
+        document.getElementById("rekapTableBody").innerHTML =
+          html ||
+          '<tr><td colspan="7" class="text-center py-6 text-gray-400">Tidak ada data yang cocok dengan pencarian.</td></tr>';
       }
     </script>
   </body>
