@@ -82,10 +82,23 @@
     </style>
   </head>
   <body class="bg-[#f0f4f8] font-sans text-gray-800 min-h-screen flex">
+    <!-- HALAMAN LOADING (tampil sesaat saat cek sesi tersimpan, supaya tidak "kedip" ke form login) -->
+    <div
+      id="loadingView"
+      class="min-h-screen w-full flex items-center justify-center p-4 fixed z-50 bg-[#f0f4f8]"
+    >
+      <div class="text-center">
+        <div
+          class="w-10 h-10 border-4 border-[#00A693] border-t-transparent rounded-full animate-spin mx-auto mb-3"
+        ></div>
+        <p class="text-sm text-gray-400 font-semibold">Memuat sesi...</p>
+      </div>
+    </div>
+
     <!-- HALAMAN LOGIN (KEMBALI MENGGUNAKAN LOGO HIJAU AGAR TERLIHAT) -->
     <div
       id="loginView"
-      class="min-h-screen w-full flex items-center justify-center p-4 fixed z-50 bg-[#f0f4f8]"
+      class="hidden min-h-screen w-full flex items-center justify-center p-4 fixed z-50 bg-[#f0f4f8]"
     >
       <div
         class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border-t-8 border-[#00A693] text-center"
@@ -936,8 +949,15 @@
 
       // Saat halaman dibuka: coba pulihkan sesi dari localStorage dulu (kalau ada
       // & masih valid di server). Kalau tidak ada / tidak valid, tampilkan login.
-      window.onload = async function () {
+      // Dipasang di DOMContentLoaded (bukan window.onload) supaya pengecekan mulai
+      // secepat mungkin, tidak menunggu gambar logo dsb selesai dimuat -- dan
+      // selama proses cek berjalan, yang tampil adalah layar "Memuat sesi..."
+      // (loadingView), BUKAN form login, supaya tidak ada kedipan ke halaman login.
+      document.addEventListener("DOMContentLoaded", async function () {
         document.getElementById("btnLogin").innerText = "Masuk Sistem";
+        const loadingView = document.getElementById("loadingView");
+        const loginView = document.getElementById("loginView");
+
         let savedToken, savedUser;
         try {
           savedToken = localStorage.getItem(SESSION_KEY_TOKEN);
@@ -945,12 +965,19 @@
         } catch (e) {
           savedToken = null;
         }
-        if (!savedToken || !savedUser) return;
+
+        if (!savedToken || !savedUser) {
+          // tidak ada sesi tersimpan -> langsung tampilkan form login
+          loadingView.classList.add("hidden");
+          loginView.classList.remove("hidden");
+          return;
+        }
 
         try {
           authToken = savedToken;
           currentUser = JSON.parse(savedUser);
           await loadMasterData(); // sekaligus jadi validasi token ke server
+          loadingView.classList.add("hidden");
           _showMainView();
           if (currentUser.mustChange) openGantiPassword(true);
         } catch (e) {
@@ -959,8 +986,10 @@
           authToken = null;
           currentUser = null;
           _clearSavedSession();
+          loadingView.classList.add("hidden");
+          loginView.classList.remove("hidden");
         }
-      };
+      });
 
       function getTimestamp() {
         const now = new Date();
